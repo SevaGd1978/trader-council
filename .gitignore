@@ -2,3 +2,11 @@ node_modules
 data
 *.png
 !public/*.png
+autorun/state.json*
+autorun/log.jsonl
+autorun/runner.out
+autorun/*.pid
+autorun/summary.json
+autorun/DONE
+autorun/STOP
+e2e-out
