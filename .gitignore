@@ -10,3 +10,10 @@ autorun/summary.json
 autorun/DONE
 autorun/STOP
 e2e-out
+autorun-stocks/state.json*
+autorun-stocks/log.jsonl
+autorun-stocks/runner.out
+autorun-stocks/*.pid
+autorun-stocks/summary.json
+autorun-stocks/DONE
+autorun-stocks/STOP
