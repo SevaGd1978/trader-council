@@ -156,6 +156,22 @@
     $('trades').innerHTML = state.trades.length ? state.trades.slice(0, 50).map((t) => `<div class="it"><div><b class="${t.side === 'buy' ? 'pos' : 'neg'}">${t.side === 'buy' ? 'Покупка' : 'Продажа'}</b> ${t.pair} ${t.qty.toPrecision(4)} @ ${C.fmt(t.price)}<div class="sub">${time(t.at)} · ${esc(t.reason)}</div></div><div>${t.pnl !== undefined ? `<span class="${t.pnl >= 0 ? 'pos' : 'neg'}">${sgn(t.pnl)}</span>` : `−${(t.qty * t.price).toFixed(2)}`}</div></div>`).join('') : '<div class="empty">Сделок пока нет</div>';
     $('decisions').innerHTML = state.rounds.length ? state.rounds.slice().reverse().slice(0, 20).map((r) => `<div class="it"><div>${time(r.at)} · ${r.pair} ${r.tf}<div class="sub">${Object.values(r.votes).map((v) => C.VOTE_ICON[v]).join('')} счёт ${r.score.toFixed(2)}${r.veto && r.proposal !== 'hold' ? ' · вето' : ''}</div></div><div><b>${C.VOTE_RU[r.final]}</b> ${r.confidence}%</div></div>`).join('') : '<div class="empty">Раундов пока не было</div>';
   }
+  async function renderAuto() {
+    try {
+      const r = await fetch('auto/summary.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) return;
+      const a = await r.json(); const box = $('autoBox'); box.style.display = '';
+      const closed = a.recentTrades.filter((t) => t.side === 'sell');
+      const p = a.position;
+      $('autoCard').innerHTML = `<div class="sub">Отдельный демо-счёт: совет сам собирается каждые 10 минут (${a.symbol}, свечи ${a.tf}, риск ${a.riskPct}%). ${a.finished ? 'Прогон завершён.' : 'Идёт до ' + time(a.endsAt) + '.'}</div>
+        <div class="grid2" style="margin-top:8px"><div><div class="lbl">Капитал</div><div class="val">${money(a.equity)}</div></div>
+        <div><div class="lbl">P&amp;L</div><div class="val ${a.pnl >= 0 ? 'pos' : 'neg'}">${sgn(a.pnl)} (${a.pnlPct >= 0 ? '+' : ''}${a.pnlPct}%)</div></div>
+        <div><div class="lbl">Раундов / сделок</div><div class="val">${a.rounds} / ${a.trades}</div></div>
+        <div><div class="lbl">Цена с начала</div><div class="val ${a.price >= a.startPrice ? 'pos' : 'neg'}">${C.pct(a.price / a.startPrice - 1)}</div></div></div>
+        ${p ? `<div class="sub" style="margin-top:8px">Позиция: ${p.qty.toPrecision(5)} ${p.pair} от ${C.fmt(p.entry)}, стоп ${C.fmt(p.sl)}, тейк ${C.fmt(p.tp)}</div>` : ''}
+        <div class="list" style="margin-top:6px">${a.recentRounds.slice(0, 6).map((x) => `<div class="it"><div>${time(x.at)} · ${C.fmt(x.price)}<div class="sub">${Object.values(x.votes).map((v) => C.VOTE_ICON[v]).join('')} счёт ${x.score}</div></div><div><b>${C.VOTE_RU[x.final]}</b> ${x.confidence}%</div></div>`).join('')}</div>
+        <div class="sub">Обновлено ${time(a.updatedAt)}${closed.length ? '' : ''}</div>`;
+    } catch (_) {}
+  }
   $('positions').addEventListener('click', (e) => {
     const p = e.target.dataset.close; if (!p) return;
     const px = prices[p] ? prices[p].price : state.positions[p].entry;
@@ -194,7 +210,7 @@
     document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
     $('actionbar').style.display = b.dataset.tab === 'chat' ? '' : 'none';
-    if (b.dataset.tab === 'port') renderPortfolio();
+    if (b.dataset.tab === 'port') { renderPortfolio(); renderAuto(); }
     if (b.dataset.tab === 'set') renderSettings();
     if (b.dataset.tab === 'chat') scrollDown();
     try { tg && tg.HapticFeedback.selectionChanged(); } catch (_) {}
