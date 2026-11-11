@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Совет трейдеров · демо</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="row">
+    <div>
+      <div class="title">Совет трейдеров <span class="badge">ДЕМО</span></div>
+      <div class="sub" id="srcLine">загрузка цен…</div>
+    </div>
+    <div class="px">
+      <div id="pxPair">TON/USDT</div>
+      <div id="pxVal" class="big">—</div>
+      <div id="pxCh" class="sub">—</div>
+    </div>
+  </div>
+  <div class="eq"><span>Капитал: <b id="eqVal">—</b></span><span id="eqPnl" class="sub"></span><span id="autoInfo" class="sub"></span></div>
+</header>
+
+<main>
+  <section id="tab-chat" class="tab active">
+    <div id="chat" class="chat"></div>
+  </section>
+
+  <section id="tab-port" class="tab">
+    <div class="card">
+      <div class="grid2">
+        <div><div class="lbl">Свободно USDT</div><div class="val" id="pBal">—</div></div>
+        <div><div class="lbl">Капитал</div><div class="val" id="pEq">—</div></div>
+        <div><div class="lbl">Итог P&amp;L</div><div class="val" id="pPnl">—</div></div>
+        <div><div class="lbl">Сделок / винрейт</div><div class="val" id="pWin">—</div></div>
+      </div>
+    </div>
+    <h3>Открытые позиции</h3>
+    <div id="positions"></div>
+    <h3>Журнал сделок</h3>
+    <div id="trades" class="card list"></div>
+    <h3>Решения совета</h3>
+    <div id="decisions" class="card list"></div>
+  </section>
+
+  <section id="tab-set" class="tab">
+    <div class="card form">
+      <label>Пара
+        <select id="sPair"><option value="TON">TON/USDT</option><option value="BTC">BTC/USDT</option><option value="ETH">ETH/USDT</option><option value="NOT">NOT/USDT</option><option value="DOGS">DOGS/USDT</option></select>
+      </label>
+      <label>Таймфрейм свечей
+        <select id="sTf"><option value="15m">15 минут</option><option value="1h">1 час</option><option value="4h">4 часа</option><option value="1d">1 день</option></select>
+      </label>
+      <label>Авто-раунды
+        <select id="sAuto"><option value="0">выключены</option><option value="1">каждую минуту</option><option value="5">каждые 5 минут</option><option value="15">каждые 15 минут</option><option value="60">каждый час</option></select>
+      </label>
+      <label>Риск на сделку: <b id="sRiskV">1%</b>
+        <input type="range" id="sRisk" min="0.25" max="5" step="0.25" value="1">
+      </label>
+      <label>Стартовый баланс (USDT)
+        <input type="number" id="sStart" min="100" max="1000000" step="100" value="10000">
+      </label>
+      <button id="btnReset" class="danger">Сбросить демо-счёт</button>
+    </div>
+    <div class="card note">
+      <b>Это демо.</b> Цены настоящие (Binance → OKX → Bybit, публичные API без ключей), а баланс и сделки виртуальные. Приложение не подключается к кошельку, не видит ваших средств и не отправляет ордера. Комиссия симулируется 0,1%. Сигналы ботов — простые индикаторы, а не инвестиционная рекомендация.
+      <br><br>TON на биржах сейчас торгуется под тикером <b>GRAM</b>, котировка берётся по нему.
+      <div class="sub" id="userLine"></div>
+    </div>
+    <div class="card note">
+      <b>Участники совета</b>
+      <div id="botsList"></div>
+    </div>
+  </section>
+</main>
+
+<div class="actionbar" id="actionbar">
+  <button id="btnRound" class="primary">▶ Провести раунд совета</button>
+</div>
+<nav class="tabs">
+  <button data-tab="chat" class="active">💬<span>Совет</span></button>
+  <button data-tab="port">💼<span>Портфель</span></button>
+  <button data-tab="set">⚙️<span>Настройки</span></button>
+</nav>
+<div id="toast" class="toast"></div>
+<script src="council.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
