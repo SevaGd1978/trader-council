@@ -156,6 +156,23 @@
     $('trades').innerHTML = state.trades.length ? state.trades.slice(0, 50).map((t) => `<div class="it"><div><b class="${t.side === 'buy' ? 'pos' : 'neg'}">${t.side === 'buy' ? 'Покупка' : 'Продажа'}</b> ${t.pair} ${t.qty.toPrecision(4)} @ ${C.fmt(t.price)}<div class="sub">${time(t.at)} · ${esc(t.reason)}</div></div><div>${t.pnl !== undefined ? `<span class="${t.pnl >= 0 ? 'pos' : 'neg'}">${sgn(t.pnl)}</span>` : `−${(t.qty * t.price).toFixed(2)}`}</div></div>`).join('') : '<div class="empty">Сделок пока нет</div>';
     $('decisions').innerHTML = state.rounds.length ? state.rounds.slice().reverse().slice(0, 20).map((r) => `<div class="it"><div>${time(r.at)} · ${r.pair} ${r.tf}<div class="sub">${Object.values(r.votes).map((v) => C.VOTE_ICON[v]).join('')} счёт ${r.score.toFixed(2)}${r.veto && r.proposal !== 'hold' ? ' · вето' : ''}</div></div><div><b>${C.VOTE_RU[r.final]}</b> ${r.confidence}%</div></div>`).join('') : '<div class="empty">Раундов пока не было</div>';
   }
+  async function renderStocks() {
+    try {
+      const r = await fetch('auto/stocks.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) return;
+      const a = await r.json(); $('stocksBox').style.display = '';
+      const usd = (x) => (isFinite(x) ? x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—') + ' $';
+      const lr = a.lastRound;
+      $('stocksCard').innerHTML = `<div class="sub">Отдельный демо-счёт 10 000 $: совет каждые 10 минут разбирает ${esc(a.tickers.join(', '))} (свечи ${esc(a.tf)}, риск ${a.riskPct}%, до ${a.maxPositions} позиций, комиссия ${(a.fee * 100).toFixed(2)}%). Торгует только когда открыта биржа NYSE (19:30–02:00 по Екатеринбургу, пн–пт). ${a.finished ? 'Прогон завершён.' : a.marketOpen ? 'Биржа открыта.' : 'Биржа закрыта.'}</div>
+        <div class="grid2" style="margin-top:8px"><div><div class="lbl">Капитал</div><div class="val">${usd(a.equity)}</div></div>
+        <div><div class="lbl">P&amp;L</div><div class="val ${a.pnl >= 0 ? 'pos' : 'neg'}">${sgn(a.pnl)} (${a.pnlPct >= 0 ? '+' : ''}${a.pnlPct}%)</div></div>
+        <div><div class="lbl">Раундов / сделок</div><div class="val">${a.rounds} / ${a.trades}${a.trades ? ' · ' + Math.round(a.wins / a.trades * 100) + '% в плюс' : ''}</div></div>
+        <div><div class="lbl">SPY за это время</div><div class="val ${(a.spyPct || 0) >= 0 ? 'pos' : 'neg'}">${a.spyPct == null ? '—' : (a.spyPct >= 0 ? '+' : '') + a.spyPct + '%'}</div></div></div>
+        ${a.positions.length ? `<div class="list" style="margin-top:6px">${a.positions.map((p) => `<div class="it"><div><b>${esc(p.pair)}</b> ${p.qty.toFixed(3)} от ${p.entry.toFixed(2)}<div class="sub">стоп ${p.sl.toFixed(2)} · тейк ${p.tp.toFixed(2)}</div></div><div class="${(p.price || p.entry) >= p.entry ? 'pos' : 'neg'}">${sgn(((p.price || p.entry) - p.entry) * p.qty)}</div></div>`).join('')}</div>` : '<div class="sub" style="margin-top:8px">Открытых позиций нет</div>'}
+        ${lr ? `<div class="sub" style="margin-top:8px">Последний раунд ${time(lr.at)}: ${lr.results.map((x) => `${esc(x.sym)} ${C.VOTE_ICON[x.decision] || ''}`).join(' ')}</div>` : ''}
+        ${a.recentTrades.length ? `<div class="list" style="margin-top:6px">${a.recentTrades.slice(0, 8).map((t) => `<div class="it"><div><b class="${t.side === 'buy' ? 'pos' : 'neg'}">${t.side === 'buy' ? 'Покупка' : 'Продажа'}</b> ${esc(t.pair)} @ ${t.price.toFixed(2)}<div class="sub">${time(t.at)} · ${esc(t.reason)}</div></div><div>${t.pnl !== undefined ? `<span class="${t.pnl >= 0 ? 'pos' : 'neg'}">${sgn(t.pnl)}</span>` : ''}</div></div>`).join('')}</div>` : ''}
+        <div class="sub">Обновлено ${time(a.updatedAt)}</div>`;
+    } catch (_) {}
+  }
   async function renderAuto() {
     try {
       const r = await fetch('auto/summary.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) return;
@@ -210,7 +227,7 @@
     document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
     $('actionbar').style.display = b.dataset.tab === 'chat' ? '' : 'none';
-    if (b.dataset.tab === 'port') { renderPortfolio(); renderAuto(); }
+    if (b.dataset.tab === 'port') { renderPortfolio(); renderAuto(); renderStocks(); }
     if (b.dataset.tab === 'set') renderSettings();
     if (b.dataset.tab === 'chat') scrollDown();
     try { tg && tg.HapticFeedback.selectionChanged(); } catch (_) {}
