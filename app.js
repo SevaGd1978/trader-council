@@ -173,6 +173,24 @@
         <div class="sub">Обновлено ${time(a.updatedAt)}</div>`;
     } catch (_) {}
   }
+  async function renderRu() {
+    try {
+      const r = await fetch('auto/ru.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) return;
+      const a = await r.json(); $('ruBox').style.display = '';
+      const rub = (x) => (isFinite(x) ? x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—') + ' ₽';
+      const sg = (x) => (x >= 0 ? '+' : '−') + rub(Math.abs(x));
+      const lr = a.lastRound;
+      $('ruCard').innerHTML = `<div class="sub">Отдельный демо-счёт 1 000 000 ₽: совет каждые 10 минут разбирает ${esc(a.tickers.join(', '))} (Мосбиржа, свечи ${esc(a.tf)}, риск ${a.riskPct}%, до ${a.maxPositions} позиций, сделки кратны лоту, комиссия ${(a.fee * 100).toFixed(2)}%). Торгует в сессии Мосбиржи: будни 09:00–11:50, 12:00–20:40 и 21:05–01:50, выходные 12:00–21:00 по Екатеринбургу. Котировки с задержкой ${a.delayMin == null ? '~15' : a.delayMin} мин. ${a.finished ? 'Прогон завершён.' : a.marketOpen ? 'Торги идут (' + esc(a.session) + ' сессия).' : 'Торгов сейчас нет.'}</div>
+        <div class="grid2" style="margin-top:8px"><div><div class="lbl">Капитал</div><div class="val">${rub(a.equity)}</div></div>
+        <div><div class="lbl">P&amp;L</div><div class="val ${a.pnl >= 0 ? 'pos' : 'neg'}">${sg(a.pnl)} (${a.pnlPct >= 0 ? '+' : ''}${a.pnlPct}%)</div></div>
+        <div><div class="lbl">Раундов / сделок</div><div class="val">${a.rounds} / ${a.trades}${a.trades ? ' · ' + Math.round(a.wins / a.trades * 100) + '% в плюс' : ''}</div></div>
+        <div><div class="lbl">${esc(a.benchSym || 'IMOEX')} за это время</div><div class="val ${(a.benchPct || 0) >= 0 ? 'pos' : 'neg'}">${a.benchPct == null ? '—' : (a.benchPct >= 0 ? '+' : '') + a.benchPct + '%'}</div></div></div>
+        ${a.positions.length ? `<div class="list" style="margin-top:6px">${a.positions.map((p) => `<div class="it"><div><b>${esc(p.pair)}</b> ${p.qty} шт. от ${p.entry.toFixed(2)}<div class="sub">стоп ${p.sl.toFixed(2)} · тейк ${p.tp.toFixed(2)}</div></div><div class="${(p.price || p.entry) >= p.entry ? 'pos' : 'neg'}">${sg(((p.price || p.entry) - p.entry) * p.qty)}</div></div>`).join('')}</div>` : '<div class="sub" style="margin-top:8px">Открытых позиций нет</div>'}
+        ${lr ? `<div class="sub" style="margin-top:8px">Последний раунд ${time(lr.at)}: ${lr.results.map((x) => `${esc(x.sym)} ${C.VOTE_ICON[x.decision] || ''}`).join(' ')}</div>` : ''}
+        ${a.recentTrades.length ? `<div class="list" style="margin-top:6px">${a.recentTrades.slice(0, 8).map((t) => `<div class="it"><div><b class="${t.side === 'buy' ? 'pos' : 'neg'}">${t.side === 'buy' ? 'Покупка' : 'Продажа'}</b> ${esc(t.pair)} ${t.qty} шт. @ ${t.price.toFixed(2)}<div class="sub">${time(t.at)} · ${esc(t.reason)}</div></div><div>${t.pnl !== undefined ? `<span class="${t.pnl >= 0 ? 'pos' : 'neg'}">${sg(t.pnl)}</span>` : ''}</div></div>`).join('')}</div>` : ''}
+        <div class="sub">Обновлено ${time(a.updatedAt)}</div>`;
+    } catch (_) {}
+  }
   async function renderAuto() {
     try {
       const r = await fetch('auto/summary.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) return;
@@ -227,7 +245,7 @@
     document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
     $('actionbar').style.display = b.dataset.tab === 'chat' ? '' : 'none';
-    if (b.dataset.tab === 'port') { renderPortfolio(); renderAuto(); renderStocks(); }
+    if (b.dataset.tab === 'port') { renderPortfolio(); renderAuto(); renderStocks(); renderRu(); }
     if (b.dataset.tab === 'set') renderSettings();
     if (b.dataset.tab === 'chat') scrollDown();
     try { tg && tg.HapticFeedback.selectionChanged(); } catch (_) {}
