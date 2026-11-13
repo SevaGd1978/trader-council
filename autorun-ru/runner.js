@@ -104,10 +104,10 @@ async function candles(sym, snap) {
 async function benchmark() {
   try {
     const d = await j(`${ISS}/engines/stock/markets/index/boards/SNDX/securities/IMOEX.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,CURRENTVALUE,LASTVALUE,UPDATETIME`);
-    const m = table(d.marketdata)[0]; const v = m.CURRENTVALUE || m.LASTVALUE; if (v) return { sym: 'IMOEX', value: v, time: m.UPDATETIME };
+    const m = table(d.marketdata)[0]; const v = m.CURRENTVALUE || m.LASTVALUE; if (v) return { sym: 'IMOEX', value: v, prev: m.LASTVALUE, time: m.UPDATETIME };
   } catch (_) {}
-  const d = await j(`${ISS}/engines/stock/markets/shares/boards/TQTF/securities/TMOS.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,UPDATETIME`);
-  const m = table(d.marketdata)[0]; return { sym: 'TMOS', value: m.LAST, time: m.UPDATETIME };
+  const d = await j(`${ISS}/engines/stock/markets/shares/boards/TQTF/securities/TMOS.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,PREVPRICE,UPDATETIME`);
+  const m = table(d.marketdata)[0]; return { sym: 'TMOS', value: m.LAST, prev: m.PREVPRICE, time: m.UPDATETIME };
 }
 
 // --- состояние ---
@@ -138,9 +138,10 @@ function sell(st, sym, price, reason) {
   st.trades.unshift(t); st.trades = st.trades.slice(0, 500); return t;
 }
 
-function councilFor(st, sym, d) {
+async function councilFor(st, sym, d, bench) {
   const view = { balance: st.balance, positions: st.positions, round: st.round, settings: { pair: sym, tf: TF, riskPct: RISK_PCT } };
-  const res = C.runRound(view, d.candles, { dryRun: true });
+  const sent = await C.fetchSentiment('ru', { symbol: sym, candles: d.candles, bench });
+  const res = C.runRound(view, d.candles, { dryRun: true, sentiment: sent });
   const msgs = res.msgs.filter((m) => !(m.bot === 'risk' && res.proposal === 'buy' && !res.veto))
     .map((m) => m.name + ': ' + m.text.replace(/\/USDT/g, '').replace(/USDT/g, '₽'));
   return { sym, price: d.price, lot: d.lot, analysisPrice: res.analysis.price, atr: res.analysis.atr, votes: res.votes, score: r2(res.score), proposal: res.proposal, veto: res.veto, decision: res.final, confidence: res.confidence, trade: null, msgs };
@@ -207,10 +208,12 @@ const slotOf = (t) => Math.floor(t / ROUND_MS);
 async function round(st) {
   const out = [], errors = [];
   let snap; try { snap = await snapshot(); } catch (e) { log({ type: 'error', time: iso(), error: 'снимок ISS: ' + e.message }); return; }
+  let bench = null;
+  try { const b = await benchmark(); bench = { sym: b.sym, value: b.value, ret: b.prev ? b.value / b.prev - 1 : null }; } catch (_) {}
   const got = await Promise.all(TICKERS.map((sym, i) => new Promise((r) => setTimeout(r, i * 400)).then(() => candles(sym, snap)).then((d) => ({ sym, d }), (e) => ({ sym, e }))));
   for (const { sym, d, e } of got) {
     if (e) { errors.push(e.message); continue; }
-    st.prices[sym] = d.price; st.lots[sym] = d.lot; out.push({ ...councilFor(st, sym, d), source: d.source, delayMin: d.delayMin, priceTime: new Date(d.priceTime).toISOString() });
+    st.prices[sym] = d.price; st.lots[sym] = d.lot; out.push({ ...await councilFor(st, sym, d, bench), source: d.source, delayMin: d.delayMin, priceTime: new Date(d.priceTime).toISOString() });
   }
   if (!out.length) { log({ type: 'error', time: iso(), error: 'нет свежих котировок: ' + errors.join(' | ') }); save(st); return; } // повтор через минуту
   execute(st, out);

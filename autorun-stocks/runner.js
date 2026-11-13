@@ -82,9 +82,10 @@ function sell(st, sym, price, reason) {
 }
 
 // один тикер: совет через общую логику (dryRun, без исполнения)
-function councilFor(st, sym, d) {
+async function councilFor(st, sym, d) {
   const view = { balance: st.balance, positions: st.positions, round: st.round, settings: { pair: sym, tf: TF, riskPct: RISK_PCT } };
-  const res = C.runRound(view, d.candles, { dryRun: true });
+  const sent = await C.fetchSentiment('us', { symbol: sym });
+  const res = C.runRound(view, d.candles, { dryRun: true, sentiment: sent });
   // реплику Риск-менеджера про размер сделки пишем сами (у акций свои лимиты), вето «продавать нечего» оставляем
   const msgs = res.msgs.filter((m) => !(m.bot === 'risk' && res.proposal === 'buy' && !res.veto))
     .map((m) => m.name + ': ' + m.text.replace(/\/USDT/g, '').replace(/USDT/g, 'USD'));
@@ -141,7 +142,7 @@ const slotOf = (t) => Math.floor(t / ROUND_MS);
 async function round(st) {
   const out = [], errors = [];
   for (const sym of TICKERS) {
-    try { const d = await candles(sym); st.prices[sym] = d.price; out.push({ ...councilFor(st, sym, d), source: d.source, priceTime: new Date(d.priceTime).toISOString() }); }
+    try { const d = await candles(sym); st.prices[sym] = d.price; out.push({ ...await councilFor(st, sym, d), source: d.source, priceTime: new Date(d.priceTime).toISOString() }); }
     catch (e) { errors.push(e.message); }
     await new Promise((r) => setTimeout(r, 400));
   }
@@ -169,10 +170,30 @@ async function stops(st) {
   save(st); if (any) { writeSummary(st); await publish(true); }
 }
 
+function applyExtend(st) {
+  const f = path.join(DIR, 'extend-until');
+  if (!fs.existsSync(f)) return;
+  const v = Number(String(fs.readFileSync(f, 'utf8')).trim());
+  if (!Number.isFinite(v) || v <= st.auto.endsAt) return;
+  st.auto.endsAt = v;
+  if (st.auto.finished) st.auto.finished = false;
+  save(st); writeSummary(st);
+  console.log(iso(), 'extended until', new Date(v).toISOString());
+}
+
 (async function main() {
   const st = load();
+  applyExtend(st);
   console.log(iso(), 'start, ends', new Date(st.auto.endsAt).toISOString());
+  let lastBeat = Date.now();
   for (;;) {
+    const gap = Date.now() - lastBeat;
+    if (gap > 3 * 60 * 1000) {
+      log({ type: 'wakeup', time: iso(), sleptMs: gap });
+      console.log(iso(), 'wakeup after', Math.round(gap / 1000), 's');
+    }
+    lastBeat = Date.now();
+    applyExtend(st);
     if (Date.now() >= st.auto.endsAt) {
       if (!st.auto.finished) { st.auto.finished = true; log({ type: 'finish', time: iso(), balance: r2(st.balance), equity: r2(equity(st)), prices: st.prices, spy: st.prices.SPY }); save(st); writeSummary(st); await publish(true); }
       console.log('done'); fs.writeFileSync(path.join(DIR, 'DONE'), iso()); process.exit(0);

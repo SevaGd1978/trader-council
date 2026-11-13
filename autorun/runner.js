@@ -85,15 +85,23 @@ async function publish(force) {
   } catch (e) { console.error('publish', e.message); }
 }
 
+// расписание по сетке: старт + n×10 мин (без накопления задержек); пропущенные слоты не догоняем
+function nextDue(st) {
+  if (!st.auto.lastRoundAt) return 0;
+  const slot = Math.floor((st.auto.lastRoundAt - st.auto.startedAt + 1000) / ROUND_MS) + 1;
+  return st.auto.startedAt + slot * ROUND_MS;
+}
 async function round(st) {
+  const due = nextDue(st); const lateSec = due ? Math.round((Date.now() - due) / 1000) : 0;
   const d = await candles(st.settings.pair, st.settings.tf);
-  const res = C.runRound(st, d.candles);
+  const sent = await C.fetchSentiment('crypto', { pair: st.settings.pair });
+  const res = C.runRound(st, d.candles, { sentiment: sent });
   if (!st.auto.startPrice) st.auto.startPrice = d.price;
   st.auto.lastPrice = d.price; st.auto.lastRoundAt = Date.now();
   delete res.analysis;
   st.rounds.push(res); st.rounds = st.rounds.slice(-20);
   const eq = equity(st, d.price);
-  log({ type: 'round', n: st.round, time: new Date().toISOString(), price: d.price, source: d.source, votes: res.votes, score: r2(res.score), proposal: res.proposal, veto: res.veto, decision: res.final, confidence: res.confidence, trade: res.trade, balance: r2(st.balance), equity: r2(eq), messages: res.msgs.map((m) => m.name + ': ' + m.text) });
+  log({ type: 'round', n: st.round, time: new Date().toISOString(), lateSec, price: d.price, source: d.source, votes: res.votes, score: r2(res.score), proposal: res.proposal, veto: res.veto, decision: res.final, confidence: res.confidence, trade: res.trade, balance: r2(st.balance), equity: r2(eq), messages: res.msgs.map((m) => m.name + ': ' + m.text) });
   save(st); writeSummary(st);
   await publish(!!res.trade);
   console.log(new Date().toISOString(), `round ${st.round} ${d.price} ${res.final} ${res.confidence}% eq ${eq.toFixed(2)}`);
@@ -110,10 +118,30 @@ async function stops(st) {
   if (closed.length) { save(st); writeSummary(st); await publish(true); }
 }
 
+function applyExtend(st) {
+  const f = path.join(DIR, 'extend-until');
+  if (!fs.existsSync(f)) return;
+  const v = Number(String(fs.readFileSync(f, 'utf8')).trim());
+  if (!Number.isFinite(v) || v <= st.auto.endsAt) return;
+  st.auto.endsAt = v;
+  if (st.auto.finished) st.auto.finished = false;
+  save(st); writeSummary(st);
+  console.log(new Date().toISOString(), 'extended until', new Date(v).toISOString());
+}
+
 (async function main() {
   const st = load();
+  applyExtend(st);
   console.log('start, ends', new Date(st.auto.endsAt).toISOString());
+  let lastBeat = Date.now();
   for (;;) {
+    const gap = Date.now() - lastBeat;
+    if (gap > 3 * 60 * 1000) {
+      log({ type: 'wakeup', time: new Date().toISOString(), sleptMs: gap });
+      console.log(new Date().toISOString(), 'wakeup after', Math.round(gap / 1000), 's');
+    }
+    lastBeat = Date.now();
+    applyExtend(st);
     if (Date.now() >= st.auto.endsAt) {
       if (!st.auto.finished) {
         st.auto.finished = true; const px = await ticker(st.settings.pair).catch(() => st.auto.lastPrice); st.auto.lastPrice = px;
@@ -123,10 +151,10 @@ async function stops(st) {
       console.log('24h done'); fs.writeFileSync(path.join(DIR, 'DONE'), new Date().toISOString()); process.exit(0);
     }
     try {
-      if (Date.now() - st.auto.lastRoundAt >= ROUND_MS - 1000) await round(st);
+      if (Date.now() >= nextDue(st)) await round(st);
       else await stops(st);
     } catch (e) { console.error(new Date().toISOString(), 'error', e.message); log({ type: 'error', time: new Date().toISOString(), error: e.message }); }
-    const nextRound = st.auto.lastRoundAt + ROUND_MS - Date.now();
+    const nextRound = nextDue(st) - Date.now();
     await new Promise((r) => setTimeout(r, Math.max(1000, Math.min(STOP_CHECK_MS, nextRound))));
   }
 })();
