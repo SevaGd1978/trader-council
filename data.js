@@ -57,6 +57,11 @@
     for (let i = 0; i < parts.length; i++) await csSet('tc_' + i, parts[i]);
     await csSet('tc_n', String(parts.length));
   }
-  const Data = { candles, prices, hasServer, cloudLoad, cloudSave, llm: false };
+  async function sentiment(pair) {
+    if (root.Council && root.Council.fetchSentiment) return root.Council.fetchSentiment('crypto', { pair });
+    return { ok: false, source: 'crypto', score: 0, detail: 'модуль совета не загружен' };
+  }
+  const Data = { candles, prices, sentiment, hasServer, cloudLoad, cloudSave, llm: false };
+
   root.Data = Data;
 })(window);

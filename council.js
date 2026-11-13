@@ -1,4 +1,4 @@
-// Логика совета: индикаторы, 6 ботов, дебаты, решение, демо-сделки. Работает и в браузере, и в Node.
+// Логика совета: индикаторы, 9 ботов, дебаты, решение, демо-сделки. Работает и в браузере, и в Node.
 (function (root) {
   'use strict';
   // ---------- индикаторы ----------
@@ -28,16 +28,100 @@
     contra: { name: 'Контрарианец', emoji: '🔄', color: '#a855f7', role: 'RSI 14 / возврат к среднему' },
     volume: { name: 'Объёмщик', emoji: '📊', color: '#f59e0b', role: 'Объёмы / OBV' },
     vola: { name: 'Волатильщик', emoji: '⚡', color: '#ef4444', role: 'Боллинджер 20,2 / ATR' },
+    news: { name: 'Новостник', emoji: '🗞️', color: '#06b6d4', role: 'Новости и настроение рынка' },
+    levels: { name: 'Уровневик', emoji: '📐', color: '#e879f9', role: 'Поддержка и сопротивление' },
+    candle: { name: 'Свечник', emoji: '🕯️', color: '#fb923c', role: 'Свечные модели' },
     risk: { name: 'Риск-менеджер', emoji: '🛡️', color: '#10b981', role: 'Размер позиции, стоп, тейк, вето' },
     arbiter: { name: 'Арбитр', emoji: '⚖️', color: '#64748b', role: 'Взвешивает голоса и решает' },
   };
-  const WEIGHTS = { trend: 1.2, contra: 1.0, volume: 0.9, vola: 1.0 };
+  const ANALYSTS = ['trend', 'contra', 'volume', 'vola', 'news', 'levels', 'candle'];
+  const WEIGHTS = { trend: 1.2, contra: 1.0, volume: 0.9, vola: 1.0, news: 0.9, levels: 1.0, candle: 0.9 };
   const VOTE_RU = { buy: 'ПОКУПКА', sell: 'ПРОДАЖА', hold: 'ЖДАТЬ' };
   const VOTE_ICON = { buy: '🟢', sell: '🔴', hold: '⚪' };
   const toVote = (s) => s > 0.2 ? 'buy' : s < -0.2 ? 'sell' : 'hold';
 
+  // ---------- уровни: свинг-экстремумы + пивоты ----------
+  function analyzeLevels(k, price, atrVal) {
+    const n = k.length; const highs = [], lows = [];
+    const Lft = 3, Rgt = 3;
+    for (let i = Lft; i < n - Rgt; i++) {
+      let isH = true, isL = true;
+      for (let j = i - Lft; j <= i + Rgt; j++) {
+        if (j === i) continue;
+        if (k[j][2] > k[i][2]) isH = false;
+        if (k[j][3] < k[i][3]) isL = false;
+      }
+      if (isH) highs.push(k[i][2]);
+      if (isL) lows.push(k[i][3]);
+    }
+    const win = k.slice(Math.max(0, n - 41), n - 1);
+    const H = Math.max(...win.map((x) => x[2])), L = Math.min(...win.map((x) => x[3])), C = win[win.length - 1][4];
+    const P = (H + L + C) / 3, R1 = 2 * P - L, S1 = 2 * P - H, R2 = P + (H - L), S2 = P - (H - L);
+    const supports = [...lows.filter((p) => p < price * 1.002), S1, S2, P].filter((p) => p <= price);
+    const resists = [...highs.filter((p) => p > price * 0.998), R1, R2, P].filter((p) => p >= price);
+    const support = supports.length ? Math.max(...supports) : S2;
+    const resist = resists.length ? Math.min(...resists) : R2;
+    const near = (lvl) => isFinite(lvl) && Math.abs(price - lvl) <= Math.max(atrVal * 0.45, price * 0.0015);
+    const prev = k[n - 2][4];
+    let score = 0, event = 'mid';
+    if (isFinite(resist) && prev <= resist && price > resist && (price - resist) <= atrVal * 1.5) { score = 0.72; event = 'breakout'; }
+    else if (isFinite(support) && prev >= support && price < support && (support - price) <= atrVal * 1.5) { score = -0.72; event = 'breakdown'; }
+    else if (near(support)) { score = 0.58; event = 'support'; }
+    else if (near(resist)) { score = -0.58; event = 'resist'; }
+    else {
+      const span = resist - support;
+      if (span > 0) {
+        const pos = (price - support) / span;
+        if (pos < 0.25) { score = 0.25; event = 'low'; }
+        else if (pos > 0.75) { score = -0.25; event = 'high'; }
+      }
+    }
+    return { score: clamp(score), support, resist, pivot: P, event, s1: S1, r1: R1 };
+  }
+
+  // ---------- свечные модели ----------
+  function bar(x) {
+    const o = x[1], h = x[2], l = x[3], c = x[4];
+    const body = Math.abs(c - o), range = Math.max(h - l, 1e-12), up = h - Math.max(o, c), dn = Math.min(o, c) - l;
+    return { o, h, l, c, body, range, up, dn, bull: c >= o, bear: c < o };
+  }
+  function analyzeCandles(k) {
+    const n = k.length; if (n < 4) return { score: 0, pattern: null, key: null };
+    const a = bar(k[n - 3]), b = bar(k[n - 2]), c = bar(k[n - 1]);
+    const mid = (x) => (x.o + x.c) / 2;
+    let best = { score: 0, pattern: null, key: null, w: 0 };
+    const take = (w, score, key, pattern) => { if (w > best.w) best = { score, pattern, key, w }; };
+    const longBody = (x) => x.body > x.range * 0.55;
+    const smallBody = (x) => x.body <= x.range * 0.3;
+    if (a.bear && longBody(a) && smallBody(b) && c.bull && c.c >= mid(a) && c.c > b.c) take(3, 0.82, 'morning_star', 'утренняя звезда');
+    if (a.bull && longBody(a) && smallBody(b) && c.bear && c.c <= mid(a) && c.c < b.c) take(3, -0.82, 'evening_star', 'вечерняя звезда');
+    if (b.bear && c.bull && c.o <= b.c && c.c >= b.o && c.body > b.body * 1.05) take(2, 0.75, 'bull_engulf', 'бычье поглощение');
+    if (b.bull && c.bear && c.o >= b.c && c.c <= b.o && c.body > b.body * 1.05) take(2, -0.75, 'bear_engulf', 'медвежье поглощение');
+    if (b.bear && c.bull && c.o < b.l && c.c > mid(b) && c.c < b.o) take(2, 0.62, 'piercing', 'просвет в облаках');
+    if (b.bull && c.bear && c.o > b.h && c.c < mid(b) && c.c > b.o) take(2, -0.62, 'dark_cloud', 'завеса из тёмных облаков');
+    if (c.dn >= 2 * Math.max(c.body, c.range * 0.12) && c.up <= c.body * 0.6 + c.range * 0.05 && c.body / c.range <= 0.45) {
+      const atHighs = k[n - 2][4] > k[Math.max(0, n - 8)][4] * 1.012;
+      if (atHighs) take(1, -0.55, 'hanging', 'повешенный');
+      else take(1, 0.65, 'hammer', 'молот');
+    }
+    if (c.up >= 2 * Math.max(c.body, c.range * 0.12) && c.dn <= c.body * 0.6 + c.range * 0.05 && c.body / c.range <= 0.45) {
+      const atLows = k[n - 2][4] < k[Math.max(0, n - 8)][4] * 0.988;
+      if (atLows) take(1, 0.55, 'inv_hammer', 'перевёрнутый молот');
+      else take(1, -0.65, 'shooting', 'падающая звезда');
+    }
+    if (best.w === 0 && c.body <= c.range * 0.12 && c.range > 0) take(1, 0, 'doji', 'доджи');
+    return { score: clamp(best.score), pattern: best.pattern, key: best.key };
+  }
+
+  function analyzeNews(sent) {
+    if (!sent || !sent.ok) {
+      return { score: 0, ok: false, source: (sent && sent.source) || 'none', label: 'нет данных', detail: (sent && (sent.detail || sent.error)) || 'источник недоступен' };
+    }
+    return { score: clamp(sent.score), ok: true, source: sent.source, label: sent.label || '', detail: sent.detail || '' };
+  }
+
   // ---------- аналитики ----------
-  function analyze(k) {
+  function analyze(k, sentiment) {
     const c = k.map((x) => x[4]); const n = c.length; const price = c[n - 1];
     const e9 = ema(c, 9), e21 = ema(c, 21);
     const gap = (last(e9) - last(e21)) / last(e21);
@@ -72,6 +156,9 @@
       contra: { score: cScore, rsi: r, sma20: s20, dev },
       volume: { score: vScore, volRatio, obvNorm, divergence, priceCh10 },
       vola: { score: bScore, up, lo, pb, squeeze, atrExp, width },
+      levels: analyzeLevels(k, price, last(A)),
+      candle: analyzeCandles(k),
+      news: analyzeNews(sentiment),
     };
   }
 
@@ -105,12 +192,44 @@
       if (t.squeeze) return band + ' Сжатие полос — скоро будет выстрел, но направление пока неясно.';
       return band + ' Цена внутри канала (' + Math.round(t.pb * 100) + '% ширины). ' + (v === 'hold' ? 'Пробоя нет — жду.' : v === 'buy' ? 'Ближе к верху, слегка за рост.' : 'Ближе к низу, слегка за снижение.');
     }
+    if (id === 'news') {
+      const t = a.news;
+      if (!t.ok) return 'Не удалось получить новости и настроение рынка (' + t.detail + '). Голосую нейтрально, чтобы не торговать вслепую.';
+      const v = toVote(t.score);
+      if (v === 'buy') return t.detail + ' Настроение бычье — я за покупку.';
+      if (v === 'sell') return t.detail + ' Настроение медвежье — я за продажу.';
+      return t.detail + ' Явного перекоса в новостях нет — жду.';
+    }
+    if (id === 'levels') {
+      const t = a.levels;
+      const near = 'Поддержка ' + fmt(t.support) + ', сопротивление ' + fmt(t.resist) + ', пивот ' + fmt(t.pivot) + '. Цена ' + fmt(a.price) + '.';
+      if (t.event === 'breakout') return near + ' Пробой сопротивления — уровни открывают дорогу вверх, покупаю.';
+      if (t.event === 'breakdown') return near + ' Пробой поддержки — уровень не удержал, продаю.';
+      if (t.event === 'support') return near + ' Цена у поддержки, жду отскока — я за покупку.';
+      if (t.event === 'resist') return near + ' Цена упирается в сопротивление, жду отката — продаю.';
+      if (t.event === 'low') return near + ' Ближе к нижней границе диапазона, слегка за отскок вверх.';
+      if (t.event === 'high') return near + ' Ближе к верхней границе диапазона, слегка за откат вниз.';
+      return near + ' Середина диапазона, крайних уровней нет — жду.';
+    }
+    if (id === 'candle') {
+      const t = a.candle; const v = toVote(t.score);
+      if (!t.pattern) return 'Ясной свечной модели на последних барах не вижу. Без паттерна голос не ставлю — жду.';
+      if (v === 'buy') return 'На графике ' + t.pattern + ' — классическая бычья модель. Я за покупку.';
+      if (v === 'sell') return 'На графике ' + t.pattern + ' — медвежий сигнал. Голосую за продажу.';
+      return 'На графике ' + t.pattern + ' — модель неопределённости. Направление неясно, жду подтверждения.';
+    }
   }
 
   function evidence(id, a) {
     if (id === 'trend') return `EMA9 ${a.trend.gap >= 0 ? 'выше' : 'ниже'} EMA21 на ${(Math.abs(a.trend.gap) * 100).toFixed(2)}%`;
     if (id === 'contra') return `RSI ${a.contra.rsi.toFixed(1)} — ${a.contra.rsi > 70 ? 'перекупленность' : a.contra.rsi < 30 ? 'перепроданность' : 'без крайностей'}`;
     if (id === 'volume') return `OBV ${a.volume.obvNorm > 0.1 ? 'растёт' : a.volume.obvNorm < -0.1 ? 'падает' : 'стоит на месте'}, объём ×${a.volume.volRatio.toFixed(2)} к среднему`;
+    if (id === 'news') return a.news.ok ? (a.news.label ? `настроение: ${a.news.label}` : 'есть новости, но перекос слабый') : 'новостей нет, голос нейтральный';
+    if (id === 'levels') {
+      const ev = { breakout: 'пробой сопротивления', breakdown: 'пробой поддержки', support: 'цена у поддержки', resist: 'цена у сопротивления', low: 'ближе к поддержке', high: 'ближе к сопротивлению', mid: 'середина диапазона' };
+      return ev[a.levels.event] || 'уровни без сигнала';
+    }
+    if (id === 'candle') return a.candle.pattern ? `модель «${a.candle.pattern}»` : 'свечных моделей нет';
     return `цена на ${Math.round(a.vola.pb * 100)}% канала Боллинджера, ATR ×${a.vola.atrExp.toFixed(2)}`;
   }
   const MOTTO = {
@@ -118,6 +237,9 @@
     contra: ['EMA запаздывают, а крайности видно сразу.', 'Толпа обычно ошибается на экстремумах.'],
     volume: ['Цена может врать, объём — редко.', 'Движение без денег — пустышка.'],
     vola: ['Без выхода из канала это просто шум.', 'Волатильность решает, где ставить стоп.'],
+    news: ['Новости двигают толпу быстрее индикаторов.', 'Без подтверждения настроения я не геройствую.'],
+    levels: ['Цена уважает уровни чаще, чем наши мнения.', 'Сначала уровень, потом вход.'],
+    candle: ['Одна свеча не рынок, но паттерн — это намёк.', 'Свечи показывают, кто победил в бою за бар.'],
   };
   function replyText(id, other, a, votes, seed) {
     const me = votes[id], ot = votes[other]; const on = BOTS[other].name;
@@ -147,8 +269,8 @@
 
   // ---------- раунд совета ----------
   function runRound(state, k, opts = {}) {
-    const a = analyze(k); const seed = Math.floor(k[k.length - 1][0] / 1000) + (state.round || 0);
-    const ids = ['trend', 'contra', 'volume', 'vola'];
+    const a = analyze(k, opts.sentiment); const seed = Math.floor(k[k.length - 1][0] / 1000) + (state.round || 0);
+    const ids = ANALYSTS;
     const votes = {}; ids.forEach((id) => { votes[id] = toVote(a[id].score); });
     const msgs = [];
     const say = (id, text, kind = 'arg') => msgs.push({ bot: id, name: BOTS[id].name, text, kind });
@@ -160,7 +282,7 @@
       const other = ids.filter((o) => o !== id).sort((x, y) => Math.abs(a[y].score - a[id].score) - Math.abs(a[x].score - a[id].score))[0];
       if (votes[other] !== votes[id] || i % 2 === 0) say(id, replyText(id, other, a, votes, seed + i), 'reply');
     });
-    // подсчёт
+    // подсчёт: арбитр взвешивает голоса всех аналитиков
     let sum = 0, wsum = 0; ids.forEach((id) => { sum += WEIGHTS[id] * a[id].score; wsum += WEIGHTS[id]; });
     const score = sum / wsum;
     let proposal = score > 0.15 ? 'buy' : score < -0.15 ? 'sell' : 'hold';
@@ -214,6 +336,90 @@
   function newState(balance = 10000) {
     return { v: 1, start: balance, balance, positions: {}, trades: [], rounds: [], round: 0, settings: { pair: 'TON', tf: '1h', autoMin: 0, riskPct: 1 }, created: Date.now() };
   }
-  const api = { analyze, runRound, checkStops, newState, closePos, BOTS, VOTE_RU, VOTE_ICON, fmt, pct, ema, rsi, atr, obv };
+
+  // ---------- новости / настроение (короткий таймаут, при сбое — нейтральный голос) ----------
+  const SENT_TTL = 15 * 60 * 1000;
+  const sentCache = {};
+  const POS_W = /\b(surge|rally|rallies|record|beats?|upgrade|bullish|growth|profit|jump|jumps|soar|soars|gain|gains|outperform|raised?|strong|optimism|recovery|highs?|breakthrough|expand|win|wins|успех|рост|рекорд|прибыл)/i;
+  const NEG_W = /\b(fall|falls|fell|miss|misses|downgrade|lawsuit|crash|bearish|decline|investigation|cuts?|slump|drop|drops|plunge|warning|weak|loss|losses|fraud|recall|layoff|selloff|plunge[sd]?|паден|убыл|убыт|обвал|страх|расследован)/i;
+  function scoreHeadlines(titles) {
+    let pos = 0, neg = 0;
+    for (const t of titles) { if (POS_W.test(t)) pos++; if (NEG_W.test(t)) neg++; }
+    const n = titles.length || 1;
+    const score = clamp((pos - neg) / Math.max(3, n * 0.6));
+    const label = score > 0.2 ? 'позитивные заголовки' : score < -0.2 ? 'негативные заголовки' : 'смешанные заголовки';
+    const preview = titles.slice(0, 3).map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const detail = `Лента Yahoo: ${titles.length} заголовков, плюс ${pos}, минус ${neg}${preview.length ? ' («' + preview[0].slice(0, 90) + (preview[0].length > 90 ? '…' : '') + '»)' : ''}.`;
+    return { score, label, detail };
+  }
+  function parseRssTitles(xml) {
+    const items = xml.split(/<item[\s>]/i).slice(1);
+    const titles = [];
+    for (const it of items) {
+      const m = it.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>|<title>([^<]+)<\/title>/i);
+      const t = (m && (m[1] || m[2]) || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").trim();
+      if (t && !/Yahoo!?\s*Finance/i.test(t)) titles.push(t);
+      if (titles.length >= 8) break;
+    }
+    return titles;
+  }
+  function momentumProxy(k, bench) {
+    const c = k.map((x) => x[4]); const n = c.length;
+    const ret = n > 11 ? (c[n - 1] - c[n - 11]) / c[n - 11] : n > 6 ? (c[n - 1] - c[n - 6]) / c[n - 6] : 0;
+    let score = clamp(ret / 0.025);
+    let detail = 'Надёжной бесплатной ленты новостей по Мосбирже нет, поэтому смотрю импульс как прокси настроения: бумага за 10 свечей ' + pct(ret);
+    if (bench && isFinite(bench.ret)) {
+      score = clamp(score * 0.55 + clamp(bench.ret / 0.015) * 0.45);
+      detail += ', ' + (bench.sym || 'индекс') + ' с предыдущего закрытия ' + pct(bench.ret);
+    }
+    detail += '.';
+    const label = score > 0.2 ? 'импульс вверх' : score < -0.2 ? 'импульс вниз' : 'нейтральный импульс';
+    return { ok: true, source: 'moex-proxy', score, label, detail };
+  }
+  async function fetchText(url, ms, headers) {
+    const c = new AbortController(); const t = setTimeout(() => c.abort(), ms);
+    try {
+      const r = await fetch(url, { signal: c.signal, headers: headers || {} });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.text();
+    } finally { clearTimeout(t); }
+  }
+  async function fetchSentiment(kind, ctx = {}) {
+    const key = kind + ':' + (ctx.symbol || ctx.pair || '');
+    const hit = sentCache[key];
+    if (hit && Date.now() - hit.at < SENT_TTL) return hit.val;
+    const fail = (source, error) => ({ ok: false, source, score: 0, error: String(error || 'ошибка'), detail: String(error || 'ошибка') });
+    let val;
+    try {
+      if (kind === 'crypto') {
+        const raw = await fetchText('https://api.alternative.me/fng/?limit=2', 4000);
+        const d = JSON.parse(raw); const row = d.data && d.data[0]; const v = Number(row && row.value);
+        if (!isFinite(v)) throw new Error('пустой индекс');
+        const label = row.value_classification || '';
+        const prev = d.data[1] ? Number(d.data[1].value) : null;
+        const ch = isFinite(prev) ? ` Вчера было ${prev}.` : '';
+        val = { ok: true, source: 'fng', score: clamp((v - 50) / 50), label, detail: `Индекс страха и жадности ${v} (${label}).${ch} Источник: alternative.me.` };
+      } else if (kind === 'us') {
+        const sym = ctx.symbol; if (!sym) throw new Error('нет тикера');
+        const url = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=' + encodeURIComponent(sym) + '&region=US&lang=en-US';
+        const xml = await fetchText(url, 4000, { 'user-agent': 'Mozilla/5.0 trader-council-demo' });
+        const titles = parseRssTitles(xml);
+        if (!titles.length) throw new Error('пустая лента');
+        const sc = scoreHeadlines(titles);
+        val = { ok: true, source: 'yahoo-rss', score: sc.score, label: sc.label, detail: sc.detail };
+      } else if (kind === 'ru') {
+        if (!ctx.candles || ctx.candles.length < 12) throw new Error('мало свечей для прокси');
+        val = momentumProxy(ctx.candles, ctx.bench);
+      } else {
+        val = fail(kind, 'неизвестный источник');
+      }
+    } catch (e) {
+      val = fail(kind, e.name === 'AbortError' ? 'таймаут источника' : e.message);
+    }
+    sentCache[key] = { at: Date.now(), val };
+    return val;
+  }
+
+  const api = { analyze, runRound, checkStops, newState, closePos, fetchSentiment, BOTS, ANALYSTS, VOTE_RU, VOTE_ICON, fmt, pct, ema, rsi, atr, obv };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Council = api;
 })(typeof window !== 'undefined' ? window : globalThis);

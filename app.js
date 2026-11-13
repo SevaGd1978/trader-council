@@ -88,7 +88,7 @@
     if (!state.rounds.length) {
       chat.appendChild(sepEl('Совет ещё не собирался'));
       const intro = [
-        { bot: 'arbiter', text: 'Добро пожаловать! Нас шестеро: четыре аналитика спорят, риск-менеджер следит за деньгами, а я принимаю решение. Счёт демо — 10 000 виртуальных USDT, цены настоящие.' },
+        { bot: 'arbiter', text: 'Добро пожаловать! Нас девятеро: семь аналитиков спорят, риск-менеджер следит за деньгами, а я принимаю решение. Счёт демо — 10 000 виртуальных USDT, цены настоящие.' },
         { bot: 'risk', text: 'Никаких реальных ордеров и кошельков: всё в песочнице. Нажмите «Провести раунд совета» или включите авто-раунды в настройках.' },
       ];
       intro.forEach((m) => chat.appendChild(msgEl(m)));
@@ -122,7 +122,8 @@
       const s = state.settings;
       const d = await Data.candles(s.pair, s.tf);
       prices[s.pair] = Object.assign(prices[s.pair] || {}, { price: d.price, source: d.source, open24: prices[s.pair] ? prices[s.pair].open24 : d.price });
-      const res = C.runRound(state, d.candles);
+      let sent = null; try { sent = await Data.sentiment(s.pair); } catch (_) { sent = { ok: false, source: 'crypto', score: 0, detail: 'ошибка запроса' }; }
+      const res = C.runRound(state, d.candles, { sentiment: sent });
       res.source = d.source; delete res.analysis;
       // необязательно: «оживить» текст через LLM, если на сервере есть ключ
       if (Data.llm) { try { const pr = await fetch('api/polish', { method: 'POST', headers, body: JSON.stringify({ messages: res.msgs }) }); const pj = await pr.json(); if (pj.texts) pj.texts.forEach((t, i) => { res.msgs[i].text = t; }); } catch (_) {} }
