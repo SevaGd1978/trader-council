@@ -95,7 +95,7 @@ async function round(st) {
   const due = nextDue(st); const lateSec = due ? Math.round((Date.now() - due) / 1000) : 0;
   const d = await candles(st.settings.pair, st.settings.tf);
   const sent = await C.fetchSentiment('crypto', { pair: st.settings.pair });
-  const res = C.runRound(st, d.candles, { sentiment: sent });
+  const res = C.runRound(st, d.candles, { sentiment: sent, htfFactor: 4 });
   if (!st.auto.startPrice) st.auto.startPrice = d.price;
   st.auto.lastPrice = d.price; st.auto.lastRoundAt = Date.now();
   delete res.analysis;

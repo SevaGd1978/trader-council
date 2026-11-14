@@ -21,9 +21,9 @@ async function klines() {
   const names = r.msgs.map((m) => m.bot);
   console.log(r.msgs.length, 'реплик, решение', r.final, r.confidence + '%', 'баланс', s.balance.toFixed(2));
   console.log('votes', r.votes);
-  console.log('news ok', sent.ok, sent.label, 'levels', r.analysis.levels.event, 'candle', r.analysis.candle.pattern);
+  console.log('news ok', sent.ok, sent.label, 'levels', r.analysis.levels.event, 'div', r.analysis.div, 'range', r.analysis.range);
   if (r.msgs.length < 12) throw new Error('мало реплик');
-  for (const id of ['trend', 'contra', 'volume', 'vola', 'news', 'levels', 'candle', 'risk', 'arbiter']) {
+  for (const id of ['trend', 'contra', 'volume', 'div', 'news', 'levels', 'range', 'risk', 'arbiter']) {
     if (!names.includes(id)) throw new Error('нет реплик от ' + id);
   }
   if (Object.keys(r.votes).length !== 7) throw new Error('ожидали 7 голосов аналитиков');
@@ -34,13 +34,11 @@ async function klines() {
   const k2 = k.slice();
   const hold = C.runRound(C.newState(), k2, { dryRun: true, sentiment: { ok: false, source: 't', detail: 'тест' } });
   if (hold.votes.news !== 'hold') throw new Error('news should be hold on failure');
-  // молот
-  const h = [];
-  for (let i = 0; i < 50; i++) h.push([i * 60000, 100, 101, 99, 100.2, 10]);
-  h.push([50 * 60000, 100, 100.15, 96, 99.85, 12]);
-  const rh = C.runRound(C.newState(), h, { dryRun: true, sentiment: { ok: false, detail: 'x' } });
-  console.log('hammer pattern', rh.analysis.candle, 'vote', rh.votes.candle);
-  if (rh.analysis.candle.key !== 'hammer' && rh.analysis.candle.key !== 'hanging') throw new Error('ожидали молот, получили ' + JSON.stringify(rh.analysis.candle));
+  // дивергент и флетовик присутствуют в анализе
+  const rh = C.runRound(C.newState(), k2, { dryRun: true, sentiment: { ok: false, detail: 'x' } });
+  if (!('div' in rh.votes) || !('range' in rh.votes)) throw new Error('нет голосов Дивергента/Флетовика');
+  if ('vola' in rh.votes || 'candle' in rh.votes) throw new Error('старые эксперты не должны голосовать');
+  console.log('v2 votes', rh.votes, 'div', rh.analysis.div, 'range', rh.analysis.range, 'thr', C.POLICY.enterThr);
   const us = await C.fetchSentiment('us', { symbol: 'AAPL' });
   console.log('yahoo', us.ok, us.label, (us.detail || us.error || '').slice(0, 180));
   console.log('OK');

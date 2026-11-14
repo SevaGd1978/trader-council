@@ -141,14 +141,19 @@ function sell(st, sym, price, reason) {
 async function councilFor(st, sym, d, bench) {
   const view = { balance: st.balance, positions: st.positions, round: st.round, settings: { pair: sym, tf: TF, riskPct: RISK_PCT } };
   const sent = await C.fetchSentiment('ru', { symbol: sym, candles: d.candles, bench });
-  const res = C.runRound(view, d.candles, { dryRun: true, sentiment: sent });
+  const res = C.runRound(view, d.candles, { dryRun: true, sentiment: sent, htfFactor: 6 });
   const msgs = res.msgs.filter((m) => !(m.bot === 'risk' && res.proposal === 'buy' && !res.veto))
     .map((m) => m.name + ': ' + m.text.replace(/\/USDT/g, '').replace(/USDT/g, '₽'));
   return { sym, price: d.price, lot: d.lot, analysisPrice: res.analysis.price, atr: res.analysis.atr, votes: res.votes, score: r2(res.score), proposal: res.proposal, veto: res.veto, decision: res.final, confidence: res.confidence, trade: null, msgs };
 }
 // исполнение: сначала продажи, потом покупки от самого сильного сигнала; объём кратен лоту
 function execute(st, out) {
-  for (const o of out) if (o.decision === 'sell' && st.positions[o.sym]) o.trade = sell(st, o.sym, o.price, `совет, уверенность ${o.confidence}%`);
+  for (const o of out) {
+    if (o.decision === 'sell' && st.positions[o.sym]) {
+      if (!C.canSell(st, o.sym)) { o.decision = 'hold'; continue; }
+      o.trade = sell(st, o.sym, o.price, `совет, уверенность ${o.confidence}%`);
+    }
+  }
   const buys = out.filter((o) => o.decision === 'buy').sort((x, y) => y.score - x.score);
   for (const o of buys) {
     if (st.positions[o.sym]) continue;
@@ -159,7 +164,8 @@ function execute(st, out) {
     const lots = Math.floor(qty / lot); qty = lots * lot;
     const plan = { qty, lots, lot, sl: price - stopDist, tp: price + stopDist * 2 };
     let veto = null;
-    if (Object.keys(st.positions).length >= MAX_POS) veto = `лимит открытых позиций (${MAX_POS}) исчерпан, сигнал слабее уже купленных`;
+    if (!C.canBuy(st, o.sym)) veto = 'пауза 2 ч после стопа по этой бумаге';
+    else if (Object.keys(st.positions).length >= MAX_POS) veto = `лимит открытых позиций (${MAX_POS}) исчерпан, сигнал слабее уже купленных`;
     else if (lots < 1) veto = `денег не хватает даже на один лот (${lot} шт.)`;
     if (veto) { o.veto = veto; o.decision = 'hold'; o.msgs.push('Риск-менеджер: ВЕТО: ' + veto + '.'); continue; }
     o.trade = buy(st, o.sym, price, plan, `совет, уверенность ${o.confidence}%`);
@@ -236,7 +242,7 @@ async function stops(st) {
     const s = snap[sym]; if (!s || !s.price || (s.sysTime - s.dataTime) / 60000 > MAX_PRICE_AGE_MIN) continue;
     const px = s.price; st.prices[sym] = px; const p = st.positions[sym];
     const reason = px <= p.sl ? 'стоп-лосс' : px >= p.tp ? 'тейк-профит' : null;
-    if (reason) { const t = sell(st, sym, px, reason); any = true; log({ type: 'stop', time: iso(), sym, price: px, trade: t, balance: r2(st.balance), equity: r2(equity(st)) }); console.log(iso(), 'stop', sym, reason, t.pnl); }
+    if (reason) { const t = sell(st, sym, px, reason); if (reason === 'стоп-лосс') C.markStop(st, sym); any = true; log({ type: 'stop', time: iso(), sym, price: px, trade: t, balance: r2(st.balance), equity: r2(equity(st)) }); console.log(iso(), 'stop', sym, reason, t.pnl); }
   }
   save(st); if (any) { writeSummary(st); await publish(true); }
 }

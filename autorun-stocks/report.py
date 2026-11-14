@@ -44,3 +44,35 @@ for r in rounds:
 if d: print('Решения по тикерам: ' + ', '.join(f"{k} {v}" for k, v in d.items()))
 errs = sum(1 for r in rows if r['type'] == 'error')
 if errs: print(f"Ошибок получения данных: {errs}")
+def _et(dt):
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.astimezone(ZoneInfo('America/New_York'))
+    except Exception:
+        return dt.astimezone(timezone(timedelta(hours=-5)))
+
+def _session_gap_sec(a, b):
+    """Секунды между a и b, попавшие в основную сессию NYSE (пн–пт 9:30–16:00 ET)."""
+    a, b = _et(a), _et(b)
+    if b <= a: return 0
+    total, cur = 0, a
+    while cur < b:
+        start = cur.replace(hour=9, minute=30, second=0, microsecond=0)
+        end = cur.replace(hour=16, minute=0, second=0, microsecond=0)
+        if cur.weekday() < 5:
+            lo, hi = max(cur, start), min(b, end)
+            if hi > lo: total += (hi - lo).total_seconds()
+        cur = (cur + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return total
+
+gaps = []
+prev = None
+for r in rounds:
+    cur = datetime.fromisoformat(r['time'].replace('Z', '+00:00')) if isinstance(r['time'], str) else datetime.fromtimestamp(r['time']/1000, timezone.utc)
+    if prev:
+        g = _session_gap_sec(prev, cur)
+        if g > 15 * 60:
+            gaps.append(g)
+    prev = cur
+if gaps:
+    print(f"Простои в часы сессии NYSE (паузы >15 мин): {len(gaps)} раз, суммарно {sum(gaps)/60:.0f} мин (макс {max(gaps)/60:.0f} мин). Период отсчёта — с исходного старта, без сброса счёта.")

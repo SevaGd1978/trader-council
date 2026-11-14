@@ -123,7 +123,8 @@
       const d = await Data.candles(s.pair, s.tf);
       prices[s.pair] = Object.assign(prices[s.pair] || {}, { price: d.price, source: d.source, open24: prices[s.pair] ? prices[s.pair].open24 : d.price });
       let sent = null; try { sent = await Data.sentiment(s.pair); } catch (_) { sent = { ok: false, source: 'crypto', score: 0, detail: 'ошибка запроса' }; }
-      const res = C.runRound(state, d.candles, { sentiment: sent });
+      const htfFactor = s.tf === '15m' ? 4 : s.tf === '4h' ? 2 : s.tf === '1d' ? 1 : 4;
+      const res = C.runRound(state, d.candles, { sentiment: sent, htfFactor });
       res.source = d.source; delete res.analysis;
       // необязательно: «оживить» текст через LLM, если на сервере есть ключ
       if (Data.llm) { try { const pr = await fetch('api/polish', { method: 'POST', headers, body: JSON.stringify({ messages: res.msgs }) }); const pj = await pr.json(); if (pj.texts) pj.texts.forEach((t, i) => { res.msgs[i].text = t; }); } catch (_) {} }

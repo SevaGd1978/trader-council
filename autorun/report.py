@@ -41,3 +41,16 @@ for r in rounds: d[r['decision']] = d.get(r['decision'], 0) + 1
 print('Решения арбитра: ' + ', '.join(f"{k} {v}" for k, v in d.items()) + f"; вето: {sum(1 for r in rounds if r.get('veto') and r['proposal'] != 'hold')}")
 errs = sum(1 for r in rows if r['type'] == 'error')
 if errs: print(f"Ошибок получения данных: {errs}")
+# простои: явные wakeup и паузы между раундами больше 15 минут
+gaps = []
+prev = None
+for r in rounds:
+    cur = datetime.fromisoformat(r['time'].replace('Z', '+00:00'))
+    if prev:
+        dt = (cur - prev).total_seconds()
+        if dt > 15 * 60:
+            gaps.append(dt)
+    prev = cur
+wake = sum(x.get('sleptMs', 0) for x in rows if x['type'] == 'wakeup')
+if gaps:
+    print(f"Простои (паузы >15 мин между раундами): {len(gaps)} раз, суммарно {sum(gaps)/3600:.1f} ч (макс {max(gaps)/60:.0f} мин). Период отсчёта — с первого раунда, без сброса счёта.")
