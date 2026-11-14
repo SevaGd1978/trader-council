@@ -1,4 +1,5 @@
 // Логика совета: индикаторы, 9 ботов, дебаты, решение, демо-сделки. Работает и в браузере, и в Node.
+  // v2: Дивергент и Флетовик вместо слабых Волатильщика/Свечника; Новостник контрарно; вход строже, пауза после стопа.
 (function (root) {
   'use strict';
   // ---------- индикаторы ----------
@@ -27,18 +28,71 @@
     trend: { name: 'Трендовик', emoji: '📈', color: '#3b82f6', role: 'EMA 9/21' },
     contra: { name: 'Контрарианец', emoji: '🔄', color: '#a855f7', role: 'RSI 14 / возврат к среднему' },
     volume: { name: 'Объёмщик', emoji: '📊', color: '#f59e0b', role: 'Объёмы / OBV' },
-    vola: { name: 'Волатильщик', emoji: '⚡', color: '#ef4444', role: 'Боллинджер 20,2 / ATR' },
-    news: { name: 'Новостник', emoji: '🗞️', color: '#06b6d4', role: 'Новости и настроение рынка' },
+    div: { name: 'Дивергент', emoji: '🔍', color: '#ef4444', role: 'Дивергенция RSI / MACD' },
+    news: { name: 'Новостник', emoji: '🗞️', color: '#06b6d4', role: 'Контртренд по настроению рынка' },
     levels: { name: 'Уровневик', emoji: '📐', color: '#e879f9', role: 'Поддержка и сопротивление' },
-    candle: { name: 'Свечник', emoji: '🕯️', color: '#fb923c', role: 'Свечные модели' },
+    range: { name: 'Флетовик', emoji: '🌊', color: '#38bdf8', role: 'Флет: возврат к среднему' },
     risk: { name: 'Риск-менеджер', emoji: '🛡️', color: '#10b981', role: 'Размер позиции, стоп, тейк, вето' },
     arbiter: { name: 'Арбитр', emoji: '⚖️', color: '#64748b', role: 'Взвешивает голоса и решает' },
   };
-  const ANALYSTS = ['trend', 'contra', 'volume', 'vola', 'news', 'levels', 'candle'];
-  const WEIGHTS = { trend: 1.2, contra: 1.0, volume: 0.9, vola: 1.0, news: 0.9, levels: 1.0, candle: 0.9 };
+  const ANALYSTS = ['trend', 'contra', 'volume', 'div', 'news', 'levels', 'range'];
+  const WEIGHTS = { trend: 0.2, contra: 1.0, volume: 0.2, div: 0.7, news: 1.6, levels: 0.7, range: 1.0 };
   const VOTE_RU = { buy: 'ПОКУПКА', sell: 'ПРОДАЖА', hold: 'ЖДАТЬ' };
   const VOTE_ICON = { buy: '🟢', sell: '🔴', hold: '⚪' };
   const toVote = (s) => s > 0.2 ? 'buy' : s < -0.2 ? 'sell' : 'hold';
+  const POLICY = { enterThr: 0.25, exitThr: 0.08, minHoldMs: 60 * 60 * 1000, stopCooldownMs: 2 * 60 * 60 * 1000 };
+  function riskMem(state) {
+    if (!state.riskMemory) state.riskMemory = { coolDown: {} };
+    if (!state.riskMemory.coolDown) state.riskMemory.coolDown = {};
+    return state.riskMemory;
+  }
+  function canBuy(state, pair, now = Date.now()) {
+    const cd = riskMem(state).coolDown[pair] || 0;
+    return now - cd >= POLICY.stopCooldownMs;
+  }
+  function canSell(state, pair, now = Date.now()) {
+    const p = state.positions && state.positions[pair];
+    if (!p || !p.at) return true;
+    return now - p.at >= POLICY.minHoldMs;
+  }
+  function markStop(state, pair, now = Date.now()) { riskMem(state).coolDown[pair] = now; }
+
+
+  function aggregate(k, factor) {
+    if (!factor || factor < 2) return k;
+    const out = [];
+    for (let i = 0; i < k.length; i += factor) {
+      const sl = k.slice(i, Math.min(k.length, i + factor));
+      out.push([sl[0][0], sl[0][1], Math.max(...sl.map((x) => x[2])), Math.min(...sl.map((x) => x[3])), sl[sl.length - 1][4], sl.reduce((s, x) => s + x[5], 0)]);
+    }
+    return out;
+  }
+  function macdHist(c) {
+    const e12 = ema(c, 12), e26 = ema(c, 26);
+    const line = e12.map((x, i) => x - e26[i]);
+    const sig = ema(line, 9);
+    return line.map((x, i) => x - sig[i]);
+  }
+  function analyzeDiv(k) {
+    const c = k.map((x) => x[4]); const n = c.length;
+    if (n < 20) return { score: 0, kind: null };
+    const R = rsi(c); const mh = macdHist(c);
+    const look = 12;
+    let score = 0, kind = null;
+    const pNow = c[n - 1], pLo = Math.min(...c.slice(n - look - 1, n - 3)), pHi = Math.max(...c.slice(n - look - 1, n - 3));
+    const rNow = R[n - 1], rLo = Math.min(...R.slice(n - look - 1, n - 3).filter(isFinite)), rHi = Math.max(...R.slice(n - look - 1, n - 3).filter(isFinite));
+    const mNow = mh[n - 1], mLo = Math.min(...mh.slice(n - look - 1, n - 3).filter(isFinite)), mHi = Math.max(...mh.slice(n - look - 1, n - 3).filter(isFinite));
+    if (pNow < pLo * 0.998 && isFinite(rLo) && rNow > rLo + 1) { score += 0.5; kind = 'бычья по RSI'; }
+    if (pNow < pLo * 0.998 && isFinite(mLo) && mNow > mLo) { score += 0.4; kind = kind ? 'бычья по RSI и MACD' : 'бычья по MACD'; }
+    if (pNow > pHi * 1.002 && isFinite(rHi) && rNow < rHi - 1) { score -= 0.5; kind = 'медвежья по RSI'; }
+    if (pNow > pHi * 1.002 && isFinite(mHi) && mNow < mHi) { score -= 0.4; kind = kind && kind.startsWith('медвежь') ? 'медвежья по RSI и MACD' : 'медвежья по MACD'; }
+    return { score: clamp(score), kind };
+  }
+  function analyzeRange(rsiVal, slope, atrPct, width) {
+    const trending = Math.abs(slope) > atrPct * 0.15 && width > 0.012;
+    const raw = clamp((50 - rsiVal) / 40);
+    return { score: clamp(trending ? raw * 0.3 : raw), trending, rsi: rsiVal };
+  }
 
   // ---------- уровни: свинг-экстремумы + пивоты ----------
   function analyzeLevels(k, price, atrVal) {
@@ -115,13 +169,14 @@
 
   function analyzeNews(sent) {
     if (!sent || !sent.ok) {
-      return { score: 0, ok: false, source: (sent && sent.source) || 'none', label: 'нет данных', detail: (sent && (sent.detail || sent.error)) || 'источник недоступен' };
+      return { score: 0, ok: false, source: (sent && sent.source) || 'none', label: 'нет данных', detail: (sent && (sent.detail || sent.error)) || 'источник недоступен', contrarian: true };
     }
-    return { score: clamp(sent.score), ok: true, source: sent.source, label: sent.label || '', detail: sent.detail || '' };
+    // Контртренд: страх толпы — повод покупать, жадность — продавать (проверили на walk-forward).
+    return { score: clamp(-sent.score), ok: true, source: sent.source, label: sent.label || '', detail: sent.detail || '', raw: sent.score, contrarian: true };
   }
 
   // ---------- аналитики ----------
-  function analyze(k, sentiment) {
+  function analyze(k, sentiment, opts = {}) {
     const c = k.map((x) => x[4]); const n = c.length; const price = c[n - 1];
     const e9 = ema(c, 9), e21 = ema(c, 21);
     const gap = (last(e9) - last(e21)) / last(e21);
@@ -130,6 +185,15 @@
     const A = atr(k); const atrPct = last(A) / price;
     let tScore = clamp(gap / (atrPct * 1.5 || 1e-9)); if (crossAgo !== null && crossAgo <= 3) tScore = clamp(tScore * 1.4);
     if (Math.sign(slope) !== Math.sign(gap)) tScore *= 0.5;
+    const htfFactor = opts.htfFactor || 4;
+    const htf = aggregate(k, htfFactor);
+    let htfScore = 0, htfOk = false;
+    if (htf.length >= 25) {
+      const hc = htf.map((x) => x[4]); const h9 = ema(hc, 9), h21 = ema(hc, 21);
+      htfScore = (h9[h9.length - 1] - h21[h21.length - 1]) / (h21[h21.length - 1] || 1e-9);
+      htfOk = true;
+      if (Math.abs(htfScore) >= 0.0015 && Math.sign(htfScore) !== Math.sign(gap) && gap !== 0) tScore = clamp(tScore * 0.25);
+    }
 
     const R = rsi(c); const r = last(R); const s20 = last(sma(c, 20)); const dev = (price - s20) / s20;
     let cScore = r < 30 ? (30 - r) / 15 + 0.3 : r > 70 ? -((r - 70) / 15 + 0.3) : (50 - r) / 60;
@@ -150,15 +214,18 @@
     const squeeze = width < bwAvg * 0.7;
     if (squeeze) bScore *= 0.5;
     void widths;
+    const divA = analyzeDiv(k);
+    const rangeA = analyzeRange(r, slope, atrPct, width);
     return {
       price, atr: last(A), atrPct,
-      trend: { score: tScore, e9: last(e9), e21: last(e21), gap, crossAgo, slope },
+      trend: { score: tScore, e9: last(e9), e21: last(e21), gap, crossAgo, slope, htfOk, htfScore },
       contra: { score: cScore, rsi: r, sma20: s20, dev },
       volume: { score: vScore, volRatio, obvNorm, divergence, priceCh10 },
-      vola: { score: bScore, up, lo, pb, squeeze, atrExp, width },
+      div: divA,
+      range: rangeA,
       levels: analyzeLevels(k, price, last(A)),
-      candle: analyzeCandles(k),
       news: analyzeNews(sentiment),
+      vola: { score: bScore, up, lo, pb, squeeze, atrExp, width },
     };
   }
 
@@ -184,21 +251,20 @@
       if (v === 'sell') return vr + ', OBV за 10 свечей падает. Деньги уходят — продавцы давят.' + div;
       return vr + ', OBV почти плоский. Объём не подтверждает ни одну сторону.' + div;
     }
-    if (id === 'vola') {
-      const t = a.vola; const v = toVote(t.score);
-      const band = 'Полосы Боллинджера ' + fmt(t.lo) + '–' + fmt(t.up) + ', ATR ' + pct(a.atrPct) + ' (×' + t.atrExp.toFixed(2) + ' к норме).';
-      if (a.price > t.up) return band + ' Пробой верхней полосы — импульс вверх, покупаю пробой.';
-      if (a.price < t.lo) return band + ' Пробой нижней полосы — импульс вниз, продаю.';
-      if (t.squeeze) return band + ' Сжатие полос — скоро будет выстрел, но направление пока неясно.';
-      return band + ' Цена внутри канала (' + Math.round(t.pb * 100) + '% ширины). ' + (v === 'hold' ? 'Пробоя нет — жду.' : v === 'buy' ? 'Ближе к верху, слегка за рост.' : 'Ближе к низу, слегка за снижение.');
+    if (id === 'div') {
+      const t = a.div; const v = toVote(t.score);
+      if (!t.kind) return 'Цена и импульс (RSI/MACD) идут рядом, явной дивергенции нет. Без расхождения не лезу — жду.';
+      if (v === 'buy') return 'Вижу ' + t.kind + ': цена обновила край, а осциллятор не подтвердил. Это бычье расхождение — я за покупку.';
+      if (v === 'sell') return 'Вижу ' + t.kind + ': цена обновила максимум, импульс слабее. Медвежье расхождение — продаю.';
+      return 'Намечается ' + t.kind + ', но сигнал слабый. Пока жду подтверждения.';
     }
     if (id === 'news') {
       const t = a.news;
       if (!t.ok) return 'Не удалось получить новости и настроение рынка (' + t.detail + '). Голосую нейтрально, чтобы не торговать вслепую.';
       const v = toVote(t.score);
-      if (v === 'buy') return t.detail + ' Настроение бычье — я за покупку.';
-      if (v === 'sell') return t.detail + ' Настроение медвежье — я за продажу.';
-      return t.detail + ' Явного перекоса в новостях нет — жду.';
+      if (v === 'buy') return t.detail + ' Толпа боится или новости негативные — я против паники и за покупку.';
+      if (v === 'sell') return t.detail + ' Толпа эйфорична или заголовки слишком радужные — я против жадности и за продажу.';
+      return t.detail + ' Перекос настроения слабый, контрарный вход не нужен — жду.';
     }
     if (id === 'levels') {
       const t = a.levels;
@@ -211,12 +277,12 @@
       if (t.event === 'high') return near + ' Ближе к верхней границе диапазона, слегка за откат вниз.';
       return near + ' Середина диапазона, крайних уровней нет — жду.';
     }
-    if (id === 'candle') {
-      const t = a.candle; const v = toVote(t.score);
-      if (!t.pattern) return 'Ясной свечной модели на последних барах не вижу. Без паттерна голос не ставлю — жду.';
-      if (v === 'buy') return 'На графике ' + t.pattern + ' — классическая бычья модель. Я за покупку.';
-      if (v === 'sell') return 'На графике ' + t.pattern + ' — медвежий сигнал. Голосую за продажу.';
-      return 'На графике ' + t.pattern + ' — модель неопределённости. Направление неясно, жду подтверждения.';
+    if (id === 'range') {
+      const t = a.range; const v = toVote(t.score);
+      const regime = t.trending ? 'Сейчас скорее тренд, во флете я тише. ' : 'Рынок в диапазоне, тут мой край. ';
+      if (v === 'buy') return regime + 'RSI ' + t.rsi.toFixed(1) + ' ближе к перепроданности — жду возврата к середине, покупаю.';
+      if (v === 'sell') return regime + 'RSI ' + t.rsi.toFixed(1) + ' ближе к перекупленности — во флете это повод сокращать, продаю.';
+      return regime + 'RSI ' + t.rsi.toFixed(1) + ' около середины, края канала нет — жду.';
     }
   }
 
@@ -224,22 +290,23 @@
     if (id === 'trend') return `EMA9 ${a.trend.gap >= 0 ? 'выше' : 'ниже'} EMA21 на ${(Math.abs(a.trend.gap) * 100).toFixed(2)}%`;
     if (id === 'contra') return `RSI ${a.contra.rsi.toFixed(1)} — ${a.contra.rsi > 70 ? 'перекупленность' : a.contra.rsi < 30 ? 'перепроданность' : 'без крайностей'}`;
     if (id === 'volume') return `OBV ${a.volume.obvNorm > 0.1 ? 'растёт' : a.volume.obvNorm < -0.1 ? 'падает' : 'стоит на месте'}, объём ×${a.volume.volRatio.toFixed(2)} к среднему`;
-    if (id === 'news') return a.news.ok ? (a.news.label ? `настроение: ${a.news.label}` : 'есть новости, но перекос слабый') : 'новостей нет, голос нейтральный';
+    if (id === 'div') return a.div.kind ? a.div.kind : 'дивергенции нет';
+    if (id === 'news') return a.news.ok ? (a.news.label ? `настроение (против толпы): ${a.news.label}` : 'перекос настроения слабый') : 'новостей нет, голос нейтральный';
     if (id === 'levels') {
       const ev = { breakout: 'пробой сопротивления', breakdown: 'пробой поддержки', support: 'цена у поддержки', resist: 'цена у сопротивления', low: 'ближе к поддержке', high: 'ближе к сопротивлению', mid: 'середина диапазона' };
       return ev[a.levels.event] || 'уровни без сигнала';
     }
-    if (id === 'candle') return a.candle.pattern ? `модель «${a.candle.pattern}»` : 'свечных моделей нет';
+    if (id === 'range') return a.range.trending ? 'режим тренда, флетовый сигнал слабее' : `флет, RSI ${a.range.rsi.toFixed(1)}`;
     return `цена на ${Math.round(a.vola.pb * 100)}% канала Боллинджера, ATR ×${a.vola.atrExp.toFixed(2)}`;
   }
   const MOTTO = {
     trend: ['Тренд — друг, пока не доказано обратное.', 'Я против того, чтобы стоять перед поездом.'],
     contra: ['EMA запаздывают, а крайности видно сразу.', 'Толпа обычно ошибается на экстремумах.'],
     volume: ['Цена может врать, объём — редко.', 'Движение без денег — пустышка.'],
-    vola: ['Без выхода из канала это просто шум.', 'Волатильность решает, где ставить стоп.'],
-    news: ['Новости двигают толпу быстрее индикаторов.', 'Без подтверждения настроения я не геройствую.'],
+    div: ['Цена врёт чаще, чем расхождение с импульсом.', 'Без дивергенции я не спорю с потоком.'],
+    news: ['Толпа обычно ошибается на крайностях страха и жадности.', 'Я читаю новости наоборот, когда все уже побежали.'],
     levels: ['Цена уважает уровни чаще, чем наши мнения.', 'Сначала уровень, потом вход.'],
-    candle: ['Одна свеча не рынок, но паттерн — это намёк.', 'Свечи показывают, кто победил в бою за бар.'],
+    range: ['Во флете края канала кормят, середина — нет.', 'В тренде я уступаю, в диапазоне забираю своё.'],
   };
   function replyText(id, other, a, votes, seed) {
     const me = votes[id], ot = votes[other]; const on = BOTS[other].name;
@@ -269,7 +336,7 @@
 
   // ---------- раунд совета ----------
   function runRound(state, k, opts = {}) {
-    const a = analyze(k, opts.sentiment); const seed = Math.floor(k[k.length - 1][0] / 1000) + (state.round || 0);
+    const a = analyze(k, opts.sentiment, opts); const seed = Math.floor(k[k.length - 1][0] / 1000) + (state.round || 0);
     const ids = ANALYSTS;
     const votes = {}; ids.forEach((id) => { votes[id] = toVote(a[id].score); });
     const msgs = [];
@@ -285,10 +352,12 @@
     // подсчёт: арбитр взвешивает голоса всех аналитиков
     let sum = 0, wsum = 0; ids.forEach((id) => { sum += WEIGHTS[id] * a[id].score; wsum += WEIGHTS[id]; });
     const score = sum / wsum;
-    let proposal = score > 0.15 ? 'buy' : score < -0.15 ? 'sell' : 'hold';
-    // если в позиции и голоса слегка негативные — выходим раньше
-    if (pos && score < -0.08) proposal = 'sell';
+    let proposal = score > POLICY.enterThr ? 'buy' : score < -POLICY.enterThr ? 'sell' : 'hold';
+    // ранний выход только после минимальной выдержки 60 мин; стоп/тейк при этом работают всегда
+    if (pos && score < -POLICY.exitThr && canSell(state, s.pair)) proposal = 'sell';
+    if (proposal === 'sell' && pos && !canSell(state, s.pair)) proposal = 'hold';
     const plan = riskPlan(a, state, proposal);
+    if (proposal === 'buy' && !canBuy(state, s.pair)) plan.veto = 'пауза 2 ч после стопа по этому инструменту';
     if (proposal === 'buy') say('risk', plan.veto ? `ВЕТО: ${plan.veto}.` : `Риск ${s.riskPct}% = ${plan.riskUsd.toFixed(2)} USDT. Стоп ${fmt(plan.sl)} (1,5×ATR), тейк ${fmt(plan.tp)} (R:R 1:2). Объём ${plan.qty.toPrecision(4)} ${s.pair} ≈ ${plan.notional.toFixed(2)} USDT. Разрешаю.`, plan.veto ? 'veto' : 'arg');
     else if (proposal === 'sell') say('risk', plan.veto ? `ВЕТО: ${plan.veto}.` : `Закрываем позицию — результат ${pct(a.price / pos.entry - 1)}. Капитал важнее надежды.`, plan.veto ? 'veto' : 'arg');
     else say('risk', pos ? `Держим. Стоп ${fmt(pos.sl)}, тейк ${fmt(pos.tp)} — сработают автоматически.` : `Сигнал слабый (${score.toFixed(2)}). Не торговать — тоже позиция.`);
@@ -321,6 +390,7 @@
     const pnl = gross - fee - (p.qty * p.entry + p.fee);
     delete state.positions[pair];
     const t = { id: Date.now(), side: 'sell', pair, qty: p.qty, price, fee, pnl, entry: p.entry, reason, at: Date.now() };
+    if (reason === 'стоп-лосс') markStop(state, pair, t.at);
     state.trades.unshift(t); state.trades = state.trades.slice(0, 300); return t;
   }
   // стоп/тейк по текущим ценам
@@ -420,6 +490,6 @@
     return val;
   }
 
-  const api = { analyze, runRound, checkStops, newState, closePos, fetchSentiment, BOTS, ANALYSTS, VOTE_RU, VOTE_ICON, fmt, pct, ema, rsi, atr, obv };
+  const api = { analyze, runRound, checkStops, newState, closePos, fetchSentiment, canBuy, canSell, markStop, POLICY, BOTS, ANALYSTS, VOTE_RU, VOTE_ICON, fmt, pct, ema, rsi, atr, obv };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Council = api;
 })(typeof window !== 'undefined' ? window : globalThis);
